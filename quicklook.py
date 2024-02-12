@@ -17,7 +17,8 @@ import numpy as np
 import datetime
 import xarray as xr
 import pandas as pd
-from pyxlma.plot.interactive import InteractiveLMAPlot
+from pyxlma.plot.xlma_base_plot import BlankPlot, FractionalSecondFormatter
+from pyxlma.plot.interactive import InteractiveLMAPlot, event_space_time_limits
 import sys
 import nexradaws
 import pyart
@@ -29,6 +30,8 @@ from pyxlma.coords import RadarCoordinateSystem
 
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import colors as pltcolors
+from matplotlib.dates import AutoDateLocator
 
 
 starttime = datetime.datetime.strptime(sys.argv[1], '%Y%m%d%H%M%S')
@@ -124,6 +127,16 @@ ds = xr.Dataset(
 
 print(f'{len(ds.number_of_events.data)} events between {ds.event_time.data.min()} and {ds.event_time.data.max()}')
 
+#### Learjet UHSAS data
+uhsas_cabin_files = [f for f in os.listdir('data/Houston/NRC_aerosol_data/') if f.startswith(starttime.strftime('%Y%m%d')) and f.endswith('UHSAS_c.nc')]
+uhsas_datasets = []
+if len(uhsas_cabin_files) > 0:
+    for f in uhsas_cabin_files:
+        this_uhsas = xr.open_dataset(os.path.join('data/Houston/NRC_aerosol_data/', f))
+        uhsas_datasets.append(this_uhsas)
+    uhsas_datasets = xr.concat(uhsas_datasets, dim='time')
+else:
+    uhsas_datasets = None
 
 #### Research radar scans
 
@@ -271,17 +284,52 @@ def radar_ray_coords(radar_ctr, ray_angle, ray_distance_km=30):
 tlim = pd.to_datetime(starttime).to_pydatetime(), pd.to_datetime(endtime).to_pydatetime()
 
 
+class myBlankPlot(BlankPlot):
+    def __init__(self, stime, bkgmap, **kwargs):
+        super().__init__(stime, bkgmap, **kwargs)
 
+    def plot(self, **kwargs):
+        super().plot(**kwargs)
+        self.fig.set_size_inches(8.5, 13.75)
+        self.ax_th.set_position([0.1, 0.86, 0.83, 0.08])
+        self.ax_lon.set_position([0.1, 0.74, 0.65, 0.08])
+        self.ax_hist.set_position([0.8, 0.74, 0.13, 0.08])
+        self.ax_plan.set_position([0.1, 0.3, 0.65, 0.4])
+        self.ax_lat.set_position([0.8, 0.3, 0.13, 0.4])
+        self.ax_disdrometer = self.fig.add_axes([0.1, 0.18, 0.83, 0.08])
+        self.ax_disdrometer.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_disdrometer))
+        self.ax_disdrometer.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_disdrometer.minorticks_on()
+        self.ax_disdrometer.set_xlabel('Time (UTC)')
+        self.ax_disdrometer.set_ylabel('Diameter ($\\mu$m)')
+        self.cax_1 = self.fig.add_axes([0.1, 0.07, 0.83, 0.01])
+        self.cax_2 = self.fig.add_axes([0.1, 0.12, 0.83, 0.01])
 
 class AnnotatedLMAPlot(InteractiveLMAPlot):
+    def __init__(self, ds, xlim=None, ylim=None, zlim=None, tlim=None, **kwargs):
+        xlim_ds, ylim_ds, zlim_ds, tlim_ds = event_space_time_limits(ds)
+        if xlim is None: xlim = xlim_ds
+        if ylim is None: ylim = ylim_ds
+        if zlim is None: zlim = zlim_ds
+        if tlim is None: tlim = tlim_ds
+
+        self.xlim = xlim
+        self.ylim = ylim
+        self.zlim = zlim
+        self.tlim = tlim
+        super().__init__(ds, **kwargs)
+
     # @output.capture()
     def make_plot(self):
-        super(AnnotatedLMAPlot, self).make_plot()
         tlim = self.bounds['t']
         tlim_sub = pd.to_datetime(tlim[0]), pd.to_datetime(tlim[1])
-        title = tlim_sub[0].strftime('%Y%m%d %H%M%S') + ' to ' + tlim_sub[1].strftime('%Y%m%d %H%M%S') + ' UTC'
-        self.lma_plot.ax_th.set_title(title)
-        
+        tstring = tlim_sub[0].strftime('%Y%m%d %H%M%S') + ' to ' + tlim_sub[1].strftime('%Y%m%d %H%M%S') + ' UTC'
+        tstring = 'LMA {}-{}'.format(self.tlim[0].strftime('%H%M'),
+                                     self.tlim[1].strftime('%H%M UTC %d %B %Y '))
+        self.lma_plot = myBlankPlot(pd.to_datetime(tlim_sub[0]), bkgmap=True,
+                      xlim=self.xlim, ylim=self.ylim, zlim=self.zlim, tlim=self.tlim, title=tstring)
+        super(AnnotatedLMAPlot, self).make_plot()
+        self.lma_plot.ax_th.set_title(tstring)
         # For longer durations, successive overplots of PPIs will 
         # completely hide the LMA data.
         plot_duration_sec = (tlim[1]-tlim[0]).total_seconds()
@@ -384,8 +432,27 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
             pcm = self.lma_plot.ax_plan.pcolormesh(self.radar_x, self.radar_y, reflec, vmin=-10, vmax=80, cmap='pyart_ChaseSpectral', zorder=0, transform=ccrs.PlateCarree())
             self.lma_plot.ax_plan.set_title(pyart.util.datetime_from_radar(radar).strftime('KGHX Lowest Elevation Reflectivity %H%M%S UTC'))
             self.data_artists.append(pcm)
+            self.lma_plot.fig.colorbar(pcm, cax=self.lma_plot.cax_1, orientation='horizontal', label='Reflectivity (dBZ)')
+        if uhsas_datasets is not None:
+            tminnumpy = np.array([tlim[0]]).astype('datetime64[s]')[0]
+            tmaxnumpy = np.array([tlim[1]]).astype('datetime64[s]')[0]
+            times_to_select = (uhsas_datasets.time.data > tminnumpy) & (uhsas_datasets.time.data < tmaxnumpy)
+            this_aerosol_data = uhsas_datasets.isel(time=times_to_select)
+            if this_aerosol_data.Nuhsas_c.shape[0] > 0:
+                if np.all(this_aerosol_data.bin_lower_uhsas_c.data[0, 1:] == this_aerosol_data.bin_upper_uhsas_c.data[0, :-1]):
+                    bin_sequence = np.append(this_aerosol_data.bin_lower_uhsas_c.data[0, :], this_aerosol_data.bin_upper_uhsas_c.data[0, -1])
+                    time_edges = np.append(this_aerosol_data.time.data, this_aerosol_data.time.data[-1] + np.diff(this_aerosol_data.time.data)[-1])
+                    dsdhandle = self.lma_plot.ax_disdrometer.pcolormesh(time_edges, bin_sequence, this_aerosol_data.Nuhsas_c.data, cmap='viridis', norm=pltcolors.LogNorm(vmin=1, vmax=np.max(uhsas_datasets.Nuhsas_c.data)))
+                    self.data_artists.append(dsdhandle)
+                    self.lma_plot.fig.colorbar(dsdhandle, cax=self.lma_plot.cax_2, orientation='horizontal', label='Count per bin')
+            else:
+                self.lma_plot.ax_disdrometer.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_disdrometer.transAxes)
+        self.lma_plot.ax_disdrometer.set_xlim(tlim[0], tlim[1])
+        self.lma_plot.ax_disdrometer.set_ylim(0, 1)
 
-    
+
+
+
 
 interactive_lma = AnnotatedLMAPlot(ds, tlim=tlim)
 
