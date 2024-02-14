@@ -25,6 +25,7 @@ import pyart
 conn = nexradaws.NexradAwsInterface()
 from pathlib import Path
 import os
+import re
 from cartopy import crs as ccrs
 from pyxlma.coords import RadarCoordinateSystem
 
@@ -32,6 +33,11 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import colors as pltcolors
 from matplotlib.dates import AutoDateLocator
+
+
+import cv2
+from PIL import Image
+import pytesseract
 
 
 starttime = datetime.datetime.strptime(sys.argv[1], '%Y%m%d%H%M%S')
@@ -129,14 +135,38 @@ print(f'{len(ds.number_of_events.data)} events between {ds.event_time.data.min()
 
 #### Learjet UHSAS data
 uhsas_cabin_files = [f for f in os.listdir('data/Houston/NRC_aerosol_data/') if f.startswith(starttime.strftime('%Y%m%d')) and f.endswith('UHSAS_c.nc')]
-uhsas_datasets = []
+uhsas_cabin_datasets = []
 if len(uhsas_cabin_files) > 0:
     for f in uhsas_cabin_files:
         this_uhsas = xr.open_dataset(os.path.join('data/Houston/NRC_aerosol_data/', f))
-        uhsas_datasets.append(this_uhsas)
-    uhsas_datasets = xr.concat(uhsas_datasets, dim='time')
+        uhsas_cabin_datasets.append(this_uhsas)
+    uhsas_cabin_datasets = xr.concat(uhsas_cabin_datasets, dim='time')
 else:
-    uhsas_datasets = None
+    uhsas_cabin_datasets = None
+
+
+uhsas_wing_files = [f for f in os.listdir('data/Houston/NRC_aerosol_data/') if f.startswith(starttime.strftime('%Y%m%d')) and f.endswith('UHSAS_w.nc')]
+uhsas_wing_datasets = []
+if len(uhsas_wing_files) > 0:
+    for f in uhsas_wing_files:
+        this_uhsas = xr.open_dataset(os.path.join('data/Houston/NRC_aerosol_data/', f))
+        uhsas_wing_datasets.append(this_uhsas)
+    uhsas_wing_datasets = xr.concat(uhsas_wing_datasets, dim='time')
+else:
+    uhsas_wing_datasets = None
+
+uhsas_vmax = np.max([uhsas_cabin_datasets.Nuhsas_c.max(), uhsas_wing_datasets.Nuhsas_w.max()])
+
+#### Learjet video
+video_file_idx = 0
+video_seek_idx = 0
+last_image_dt = None
+last_success_idx = None
+lear_video_files = [f for f in sorted(os.listdir('data/Houston/NRC_aerosol_videos/')) if starttime.strftime('%Y-%m-%d') in f and f.endswith('.avi')]
+lear_videos = []
+if len(lear_video_files) > 0:
+    for f in lear_video_files:
+        lear_videos.append(cv2.VideoCapture(os.path.join('data/Houston/NRC_aerosol_videos/', f)))
 
 #### Research radar scans
 
@@ -283,27 +313,45 @@ def radar_ray_coords(radar_ctr, ray_angle, ray_distance_km=30):
 
 tlim = pd.to_datetime(starttime).to_pydatetime(), pd.to_datetime(endtime).to_pydatetime()
 
-
 class myBlankPlot(BlankPlot):
     def __init__(self, stime, bkgmap, **kwargs):
         super().__init__(stime, bkgmap, **kwargs)
 
     def plot(self, **kwargs):
         super().plot(**kwargs)
-        self.fig.set_size_inches(8.5, 13.75)
-        self.ax_th.set_position([0.1, 0.86, 0.83, 0.08])
-        self.ax_lon.set_position([0.1, 0.74, 0.65, 0.08])
-        self.ax_hist.set_position([0.8, 0.74, 0.13, 0.08])
-        self.ax_plan.set_position([0.1, 0.3, 0.65, 0.4])
-        self.ax_lat.set_position([0.8, 0.3, 0.13, 0.4])
-        self.ax_disdrometer = self.fig.add_axes([0.1, 0.18, 0.83, 0.08])
-        self.ax_disdrometer.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_disdrometer))
-        self.ax_disdrometer.xaxis.set_major_locator(AutoDateLocator())
-        self.ax_disdrometer.minorticks_on()
-        self.ax_disdrometer.set_xlabel('Time (UTC)')
-        self.ax_disdrometer.set_ylabel('Diameter ($\\mu$m)')
-        self.cax_1 = self.fig.add_axes([0.1, 0.07, 0.83, 0.01])
-        self.cax_2 = self.fig.add_axes([0.1, 0.12, 0.83, 0.01])
+        FIG_WIDTH = 24.5
+        FIG_HEIGHT = 13.75
+
+        self.fig.set_size_inches(FIG_WIDTH, FIG_HEIGHT)
+
+        self.ax_th.set_position([.85/FIG_WIDTH, 10.45/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_lon.set_position([.85/FIG_WIDTH, 8.8/FIG_HEIGHT, 5.525/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_hist.set_position([6.8/FIG_WIDTH, 8.8/FIG_HEIGHT, 1.105/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_plan.set_position([.85/FIG_WIDTH, 2.75/FIG_HEIGHT, 5.525/FIG_WIDTH, 5.5/FIG_HEIGHT])
+        self.ax_lat.set_position([6.8/FIG_WIDTH, 2.75/FIG_HEIGHT, 1.105/FIG_WIDTH, 5.5/FIG_HEIGHT])
+        
+        self.ax_cabin_uhsas = self.fig.add_axes([8.5/FIG_WIDTH, 4.5/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_cabin_uhsas.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_cabin_uhsas))
+        self.ax_cabin_uhsas.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_cabin_uhsas.minorticks_on()
+        self.ax_cabin_uhsas.set_xlabel('Time (UTC)')
+        self.ax_cabin_uhsas.set_ylabel('Diameter ($\\mu$m)')
+        self.ax_cabin_uhsas.set_title('UHSAS (Aircraft Cabin)')
+
+        
+        self.ax_wing_uhsas = self.fig.add_axes([8.5/FIG_WIDTH, 2.5/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_wing_uhsas.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_cabin_uhsas))
+        self.ax_wing_uhsas.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_wing_uhsas.minorticks_on()
+        self.ax_wing_uhsas.set_xlabel('Time (UTC)')
+        self.ax_wing_uhsas.set_ylabel('Diameter ($\\mu$m)')
+        self.ax_wing_uhsas.set_title('UHSAS (Aircraft Wing)')
+
+        self.ax_cam = self.fig.add_axes([8.5/FIG_WIDTH, 6.23/FIG_HEIGHT, 7.055/FIG_WIDTH, 5.32/FIG_HEIGHT])
+        self.ax_cam.axis('off')
+
+        self.cax_1 = self.fig.add_axes([1.1/FIG_WIDTH, 0.12, 5.525/FIG_WIDTH, 0.01])
+        self.cax_2 = self.fig.add_axes([8.5/FIG_WIDTH, 0.12, 7.055/FIG_WIDTH, 0.01])
 
 class AnnotatedLMAPlot(InteractiveLMAPlot):
     def __init__(self, ds, xlim=None, ylim=None, zlim=None, tlim=None, **kwargs):
@@ -323,9 +371,8 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
     def make_plot(self):
         tlim = self.bounds['t']
         tlim_sub = pd.to_datetime(tlim[0]), pd.to_datetime(tlim[1])
-        tstring = tlim_sub[0].strftime('%Y%m%d %H%M%S') + ' to ' + tlim_sub[1].strftime('%Y%m%d %H%M%S') + ' UTC'
-        tstring = 'LMA {}-{}'.format(self.tlim[0].strftime('%H%M'),
-                                     self.tlim[1].strftime('%H%M UTC %d %B %Y '))
+        tstring = 'LMA {}-{}'.format(tlim_sub[0].strftime('%H%M'),
+                                     tlim_sub[1].strftime('%H%M UTC %d %B %Y '))
         self.lma_plot = myBlankPlot(pd.to_datetime(tlim_sub[0]), bkgmap=True,
                       xlim=self.xlim, ylim=self.ylim, zlim=self.zlim, tlim=self.tlim, title=tstring)
         super(AnnotatedLMAPlot, self).make_plot()
@@ -433,26 +480,108 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
             self.lma_plot.ax_plan.set_title(pyart.util.datetime_from_radar(radar).strftime('KGHX Lowest Elevation Reflectivity %H%M%S UTC'))
             self.data_artists.append(pcm)
             self.lma_plot.fig.colorbar(pcm, cax=self.lma_plot.cax_1, orientation='horizontal', label='Reflectivity (dBZ)')
-        if uhsas_datasets is not None:
+        if uhsas_cabin_datasets is not None:
             tminnumpy = np.array([tlim[0]]).astype('datetime64[s]')[0]
             tmaxnumpy = np.array([tlim[1]]).astype('datetime64[s]')[0]
-            times_to_select = (uhsas_datasets.time.data > tminnumpy) & (uhsas_datasets.time.data < tmaxnumpy)
-            this_aerosol_data = uhsas_datasets.isel(time=times_to_select)
+            times_to_select = (uhsas_cabin_datasets.time.data > tminnumpy) & (uhsas_cabin_datasets.time.data < tmaxnumpy)
+            this_aerosol_data = uhsas_cabin_datasets.isel(time=times_to_select)
             if this_aerosol_data.Nuhsas_c.shape[0] > 0:
-                if np.all(this_aerosol_data.bin_lower_uhsas_c.data[0, 1:] == this_aerosol_data.bin_upper_uhsas_c.data[0, :-1]):
+                if len(this_aerosol_data.bin_lower_uhsas_c.data) > 0 and np.all(this_aerosol_data.bin_lower_uhsas_c.data[0, 1:] == this_aerosol_data.bin_upper_uhsas_c.data[0, :-1]):
                     bin_sequence = np.append(this_aerosol_data.bin_lower_uhsas_c.data[0, :], this_aerosol_data.bin_upper_uhsas_c.data[0, -1])
                     time_edges = np.append(this_aerosol_data.time.data, this_aerosol_data.time.data[-1] + np.diff(this_aerosol_data.time.data)[-1])
-                    dsdhandle = self.lma_plot.ax_disdrometer.pcolormesh(time_edges, bin_sequence, this_aerosol_data.Nuhsas_c.data, cmap='viridis', norm=pltcolors.LogNorm(vmin=1, vmax=np.max(uhsas_datasets.Nuhsas_c.data)))
-                    self.data_artists.append(dsdhandle)
+                    dsdhandle = self.lma_plot.ax_cabin_uhsas.pcolormesh(time_edges, bin_sequence, this_aerosol_data.Nuhsas_c.data, cmap='viridis', norm=pltcolors.LogNorm(vmin=1, vmax=uhsas_vmax))
                     self.lma_plot.fig.colorbar(dsdhandle, cax=self.lma_plot.cax_2, orientation='horizontal', label='Count per bin')
+                else:
+                    dsdhandle = self.lma_plot.ax_cabin_uhsas.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_cabin_uhsas.transAxes)
             else:
-                self.lma_plot.ax_disdrometer.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_disdrometer.transAxes)
-        self.lma_plot.ax_disdrometer.set_xlim(tlim[0], tlim[1])
-        self.lma_plot.ax_disdrometer.set_ylim(0, 1)
+                dsdhandle = self.lma_plot.ax_cabin_uhsas.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_cabin_uhsas.transAxes)
+            self.data_artists.append(dsdhandle)
+        self.lma_plot.ax_cabin_uhsas.set_xlim(tlim[0], tlim[1])
+        self.lma_plot.ax_cabin_uhsas.set_ylim(0, 1)
+        if uhsas_wing_datasets is not None:
+            tminnumpy = np.array([tlim[0]]).astype('datetime64[s]')[0]
+            tmaxnumpy = np.array([tlim[1]]).astype('datetime64[s]')[0]
+            times_to_select = (uhsas_wing_datasets.time.data > tminnumpy) & (uhsas_wing_datasets.time.data < tmaxnumpy)
+            this_aerosol_data = uhsas_wing_datasets.isel(time=times_to_select)
+            if this_aerosol_data.Nuhsas_w.shape[0] > 0:
+                if len(this_aerosol_data.bin_lower_uhsas_w.data) > 0 and np.all(this_aerosol_data.bin_lower_uhsas_w.data[0, 1:] == this_aerosol_data.bin_upper_uhsas_w.data[0, :-1]):
+                    bin_sequence = np.append(this_aerosol_data.bin_lower_uhsas_w.data[0, :], this_aerosol_data.bin_upper_uhsas_w.data[0, -1])
+                    time_edges = np.append(this_aerosol_data.time.data, this_aerosol_data.time.data[-1] + np.diff(this_aerosol_data.time.data)[-1])
+                    dsdhandle = self.lma_plot.ax_wing_uhsas.pcolormesh(time_edges, bin_sequence, this_aerosol_data.Nuhsas_w.data, cmap='viridis', norm=pltcolors.LogNorm(vmin=1, vmax=uhsas_vmax))
+                    self.lma_plot.fig.colorbar(dsdhandle, cax=self.lma_plot.cax_2, orientation='horizontal', label='Count per bin')
+                else:
+                    dsdhandle = self.lma_plot.ax_wing_uhsas.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_wing_uhsas.transAxes)
+            else:
+                dsdhandle = self.lma_plot.ax_wing_uhsas.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_wing_uhsas.transAxes)
+            self.data_artists.append(dsdhandle)
+        self.lma_plot.ax_wing_uhsas.set_xlim(tlim[0], tlim[1])
+        self.lma_plot.ax_wing_uhsas.set_ylim(0, 1)
 
-
-
-
+        self.lma_plot.ax_cam.get_children().clear()
+        if len(lear_videos) > 0 and tlim[1] - tlim[0] < datetime.timedelta(minutes=6):
+            good_frames = []
+            good_times = []
+            global video_file_idx
+            global video_seek_idx
+            global last_image_dt
+            global last_success_idx
+            if lear_videos[video_file_idx].isOpened() and video_file_idx != -1 and video_seek_idx != -1:
+                while video_seek_idx < lear_videos[video_file_idx].get(cv2.CAP_PROP_FRAME_COUNT):
+                    if last_image_dt is not None and last_image_dt > tlim[1]:
+                        break
+                    lear_videos[video_file_idx].set(cv2.CAP_PROP_POS_FRAMES, video_seek_idx)
+                    ret, frame = lear_videos[video_file_idx].read()
+                    if ret:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        ocr_rgb = frame_rgb.copy()[:58, :360, :]
+                        greenmask = (ocr_rgb[:, :, 1] > 175) & (ocr_rgb[:, :, 0] < 150) & (ocr_rgb[:, :, 2] < 150)
+                        ocr_rgb[:, :, 1][~greenmask] = 0
+                        ocr_rgb[:, :, 1][greenmask] = 255
+                        ocr_rgb[:, :, 0] = ocr_rgb[:, :, 1]
+                        ocr_rgb[:, :, 2] = ocr_rgb[:, :, 1]
+                        pil_image = Image.fromarray(ocr_rgb)
+                        string_lines_in_image = pytesseract.image_to_string(pil_image).split('\n')
+                        image_dt = None
+                        for line in string_lines_in_image:
+                            if 'UTC' in line:
+                                try:
+                                    line = re.sub(r'[^A-Za-z0-9]+', '', line).replace('UTC', '000UTC')
+                                    image_dt = datetime.datetime.strptime(line, '%Y%m%d%H%M%S%fUTC')
+                                    if image_dt.year != tlim[0].year and image_dt.year != tlim[1].year:
+                                        image_dt = image_dt.replace(year=tlim[0].year)
+                                    if image_dt.month != tlim[0].month and image_dt.month != tlim[1].month:
+                                        image_dt = image_dt.replace(month=tlim[0].month)
+                                    if image_dt.day != tlim[0].day and image_dt.day != tlim[1].day:
+                                        image_dt = image_dt.replace(day=tlim[0].day)
+                                    if last_image_dt is not None and last_success_idx is not None:
+                                        diff_in_times = (image_dt - last_image_dt).total_seconds()
+                                        if diff_in_times < 0 or diff_in_times > 60+((video_seek_idx - last_success_idx)/30):
+                                            image_dt = None
+                                            break
+                                    last_image_dt = image_dt
+                                    last_success_idx = video_seek_idx
+                                except ValueError as e:
+                                    image_dt = None
+                                break
+                        if image_dt is not None:
+                            if image_dt > tlim[0] and image_dt < tlim[1]:
+                                good_frames.append(frame_rgb)
+                                good_times.append(image_dt)
+                            if image_dt > tlim[1]:
+                                break
+                        video_seek_idx += 150
+                else:
+                    video_seek_idx = 0
+                    last_success_idx = None
+                    last_image_dt = None
+                    video_file_idx += 1
+                    if video_file_idx >= len(lear_videos):
+                        video_file_idx = -1
+                        video_seek_idx = -1
+            if len(good_frames) > 0:
+                plane_image = self.lma_plot.ax_cam.imshow(good_frames[-1])
+            else:
+                plane_image = self.lma_plot.ax_wing_uhsas.text(0.5, 0.5, 'Plane not in flight', ha='center', va='center', transform=self.lma_plot.ax_cam.transAxes)
 
 interactive_lma = AnnotatedLMAPlot(ds, tlim=tlim)
 
