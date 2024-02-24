@@ -16,6 +16,7 @@ warnings.filterwarnings(action='ignore')
 import numpy as np
 import datetime
 import xarray as xr
+from act.io import read_icartt 
 import pandas as pd
 from pyxlma.plot.xlma_base_plot import BlankPlot, FractionalSecondFormatter
 from pyxlma.plot.interactive import InteractiveLMAPlot, event_space_time_limits
@@ -133,7 +134,35 @@ ds = xr.Dataset(
 
 print(f'{len(ds.number_of_events.data)} events between {ds.event_time.data.min()} and {ds.event_time.data.max()}')
 
-#### Learjet UHSAS data
+## Learjet data
+lear_datasets = []
+lear_flights_dirs = [f for f in sorted(os.listdir('data/Houston/LEAR_data/')) if starttime.strftime('%Y%m%d') in f]
+for dir in lear_flights_dirs:
+    file_to_read = [f for f in sorted(os.listdir(f'data/Houston/LEAR_data/{dir}')) if f.endswith('.ict') and 'Page0' in f][0]
+    lear_ds = read_icartt(f'data/Houston/LEAR_data/{dir}/{file_to_read}')
+    lear_datasets.append(lear_ds)
+if len(lear_datasets) > 0:
+    lear_datasets = xr.concat(lear_datasets, dim='time')
+    temp_vmin = np.min(lear_datasets.Dew.data)
+    temp_vmax = np.max(lear_datasets.Temp.data)
+else:
+    lear_datasets = None
+
+
+
+
+#### Learjet video
+video_file_idx = 0
+video_seek_idx = 0
+last_image_dt = None
+last_success_idx = None
+lear_video_files = [f for f in sorted(os.listdir('data/Houston/NRC_aerosol_videos/')) if starttime.strftime('%Y-%m-%d') in f and f.endswith('.avi')]
+lear_videos = []
+if len(lear_video_files) > 0:
+    for f in lear_video_files:
+        lear_videos.append(cv2.VideoCapture(os.path.join('data/Houston/NRC_aerosol_videos/', f)))
+
+#### Convair UHSAS data
 uhsas_cabin_files = [f for f in os.listdir('data/Houston/NRC_aerosol_data/') if f.startswith(starttime.strftime('%Y%m%d')) and f.endswith('UHSAS_c.nc')]
 uhsas_cabin_datasets = []
 if len(uhsas_cabin_files) > 0:
@@ -156,18 +185,6 @@ else:
     uhsas_wing_datasets = None
 
 uhsas_vmax = np.max([uhsas_cabin_datasets.Nuhsas_c.max(), uhsas_wing_datasets.Nuhsas_w.max()])
-
-#### Learjet video
-video_file_idx = 0
-video_seek_idx = 0
-last_image_dt = None
-last_success_idx = None
-lear_video_files = [f for f in sorted(os.listdir('data/Houston/NRC_aerosol_videos/')) if starttime.strftime('%Y-%m-%d') in f and f.endswith('.avi')]
-lear_videos = []
-if len(lear_video_files) > 0:
-    for f in lear_video_files:
-        lear_videos.append(cv2.VideoCapture(os.path.join('data/Houston/NRC_aerosol_videos/', f)))
-
 #### Research radar scans
 
 csapr_lon, csapr_lat = -95.283893, 29.531782
@@ -324,13 +341,33 @@ class myBlankPlot(BlankPlot):
 
         self.fig.set_size_inches(FIG_WIDTH, FIG_HEIGHT)
 
-        self.ax_th.set_position([.85/FIG_WIDTH, 10.45/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
-        self.ax_lon.set_position([.85/FIG_WIDTH, 8.8/FIG_HEIGHT, 5.525/FIG_WIDTH, 1.1/FIG_HEIGHT])
-        self.ax_hist.set_position([6.8/FIG_WIDTH, 8.8/FIG_HEIGHT, 1.105/FIG_WIDTH, 1.1/FIG_HEIGHT])
-        self.ax_plan.set_position([.85/FIG_WIDTH, 2.75/FIG_HEIGHT, 5.525/FIG_WIDTH, 5.5/FIG_HEIGHT])
-        self.ax_lat.set_position([6.8/FIG_WIDTH, 2.75/FIG_HEIGHT, 1.105/FIG_WIDTH, 5.5/FIG_HEIGHT])
+        self.ax_th.set_position([.85/FIG_WIDTH, (FIG_HEIGHT-1.4)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_lon.set_position([.85/FIG_WIDTH, (FIG_HEIGHT-3.05)/FIG_HEIGHT, 5.525/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_hist.set_position([6.8/FIG_WIDTH, (FIG_HEIGHT-3.05)/FIG_HEIGHT, 1.105/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_plan.set_position([.85/FIG_WIDTH, (FIG_HEIGHT-9.1)/FIG_HEIGHT, 5.525/FIG_WIDTH, 5.5/FIG_HEIGHT])
+        self.ax_lat.set_position([6.8/FIG_WIDTH, (FIG_HEIGHT-9.1)/FIG_HEIGHT, 1.105/FIG_WIDTH, 5.5/FIG_HEIGHT])
         
-        self.ax_cabin_uhsas = self.fig.add_axes([8.5/FIG_WIDTH, 4.5/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+
+        self.ax_cam = self.fig.add_axes([8.6/FIG_WIDTH, (FIG_HEIGHT-5.62)/FIG_HEIGHT, 7.055/FIG_WIDTH, 5.32/FIG_HEIGHT])
+        self.ax_cam.set_title('SPEC Learjet Data')
+        self.ax_cam.axis('off')
+
+        self.ax_lear_td = self.fig.add_axes([8.6/FIG_WIDTH, (FIG_HEIGHT-7.35)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_lear_td.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_lear_td))
+        self.ax_lear_td.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_lear_td.minorticks_on()
+        self.ax_lear_td.set_xlabel('Time (UTC)')
+        self.ax_lear_td.set_ylabel('Temperature ($\\degree$C)')
+
+        
+        self.ax_lear_cwc = self.fig.add_axes([8.6/FIG_WIDTH, (FIG_HEIGHT-9.35)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_lear_cwc.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_lear_cwc))
+        self.ax_lear_cwc.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_lear_cwc.minorticks_on()
+        self.ax_lear_cwc.set_xlabel('Time (UTC)')
+        self.ax_lear_cwc.set_ylabel('Water Content ($\\frac{g}{m^{3}}$)')
+
+        self.ax_cabin_uhsas = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-7.35)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
         self.ax_cabin_uhsas.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_cabin_uhsas))
         self.ax_cabin_uhsas.xaxis.set_major_locator(AutoDateLocator())
         self.ax_cabin_uhsas.minorticks_on()
@@ -339,19 +376,16 @@ class myBlankPlot(BlankPlot):
         self.ax_cabin_uhsas.set_title('UHSAS (Aircraft Cabin)')
 
         
-        self.ax_wing_uhsas = self.fig.add_axes([8.5/FIG_WIDTH, 2.5/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
-        self.ax_wing_uhsas.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_cabin_uhsas))
+        self.ax_wing_uhsas = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-9.35)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
+        self.ax_wing_uhsas.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_wing_uhsas))
         self.ax_wing_uhsas.xaxis.set_major_locator(AutoDateLocator())
         self.ax_wing_uhsas.minorticks_on()
         self.ax_wing_uhsas.set_xlabel('Time (UTC)')
         self.ax_wing_uhsas.set_ylabel('Diameter ($\\mu$m)')
         self.ax_wing_uhsas.set_title('UHSAS (Aircraft Wing)')
 
-        self.ax_cam = self.fig.add_axes([8.5/FIG_WIDTH, 6.23/FIG_HEIGHT, 7.055/FIG_WIDTH, 5.32/FIG_HEIGHT])
-        self.ax_cam.axis('off')
-
-        self.cax_1 = self.fig.add_axes([1.1/FIG_WIDTH, 0.12, 5.525/FIG_WIDTH, 0.01])
-        self.cax_2 = self.fig.add_axes([8.5/FIG_WIDTH, 0.12, 7.055/FIG_WIDTH, 0.01])
+        self.cax_1 = self.fig.add_axes([1.1/FIG_WIDTH, (FIG_HEIGHT-13.25)/FIG_HEIGHT, 5.525/FIG_WIDTH, 0.01])
+        self.cax_2 = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-13.25)/FIG_HEIGHT, 7.055/FIG_WIDTH, 0.01])
 
 class AnnotatedLMAPlot(InteractiveLMAPlot):
     def __init__(self, ds, xlim=None, ylim=None, zlim=None, tlim=None, **kwargs):
@@ -582,6 +616,18 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
                 plane_image = self.lma_plot.ax_cam.imshow(good_frames[-1])
             else:
                 plane_image = self.lma_plot.ax_wing_uhsas.text(0.5, 0.5, 'Plane not in flight', ha='center', va='center', transform=self.lma_plot.ax_cam.transAxes)
+        if lear_datasets is not None:
+            this_time_lear_data = lear_datasets.sel(time=slice(tlim[0], tlim[1]))
+            if this_time_lear_data.time.shape[0] > 0:
+                lear_temp = self.lma_plot.ax_lear_td.plot(this_time_lear_data.time.data, this_time_lear_data.Temp.data, color='red')
+                lear_dew = self.lma_plot.ax_lear_td.plot(this_time_lear_data.time.data, this_time_lear_data.Dew.data, color='lime')
+                self.lma_plot.ax_lear_td.set_xlim(tlim[0], tlim[1])
+                self.lma_plot.ax_lear_td.set_ylim(temp_vmin, temp_vmax)
+                self.data_artists.extend(lear_temp)
+                self.data_artists.extend(lear_dew)
+            else:
+                lear_temp = self.lma_plot.ax_lear_td.text(0.5, 0.5, 'No Learjet data', ha='center', va='center', transform=self.lma_plot.ax_lear_td.transAxes)
+                self.data_artists.append(lear_temp)
 
 interactive_lma = AnnotatedLMAPlot(ds, tlim=tlim)
 
