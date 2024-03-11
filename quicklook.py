@@ -41,6 +41,15 @@ from PIL import Image
 import pytesseract
 
 
+def centers_to_edges(x):
+    xedge=np.zeros(x.shape[0]+1)
+    xedge[1:-1] = (x[:-1] + x[1:])/2.0
+    dx = np.mean(np.abs(xedge[2:-1] - xedge[1:-2]))
+    xedge[0] = xedge[1] - dx
+    xedge[-1] = xedge[-2] + dx
+    return xedge
+
+
 starttime = datetime.datetime.strptime(sys.argv[1], '%Y%m%d%H%M%S')
 endtime = datetime.datetime.strptime(sys.argv[2], '%Y%m%d%H%M%S')
 
@@ -136,20 +145,46 @@ print(f'{len(ds.number_of_events.data)} events between {ds.event_time.data.min()
 
 ## Learjet data
 lear_datasets = []
+hvps_datasets = []
 lear_flights_dirs = [f for f in sorted(os.listdir('data/Houston/LEAR_data/')) if starttime.strftime('%Y%m%d') in f]
 for dir in lear_flights_dirs:
     file_to_read = [f for f in sorted(os.listdir(f'data/Houston/LEAR_data/{dir}')) if f.endswith('.ict') and 'Page0' in f][0]
     lear_ds = read_icartt(f'data/Houston/LEAR_data/{dir}/{file_to_read}')
     lear_datasets.append(lear_ds)
+    hvps_file = file_to_read = [f for f in sorted(os.listdir(f'data/Houston/LEAR_data/{dir}')) if f.endswith('.ict') and 'HVPS4H50' in f][0]
+    hvps_dataset = read_icartt(f'data/Houston/LEAR_data/{dir}/{hvps_file}')
+    hvps_datasets.append(hvps_dataset)
 if len(lear_datasets) > 0:
     lear_datasets = xr.concat(lear_datasets, dim='time')
+    hvps_datasets = xr.concat(hvps_datasets, dim='time')
+    graupel_bins = [hvps_datasets[var_in_diameter_range].data for var_in_diameter_range in hvps_datasets.data_vars if var_in_diameter_range.startswith('cbin') and int(var_in_diameter_range[-2:]) >= 31 and int(var_in_diameter_range[-2:]) <= 48]
+    graupel_bins = np.array(graupel_bins)
+    graupel_bin_centers = np.array([2075., 2175., 2275., 2375., 2475., 2650., 2900., 3125., 3375., 3650., 3900., 4150., 4400., 4650., 4900., 5275., 5775., 6275.])
+    graupel_bin_edges = np.array([[2025., 2125.],
+                                  [2125., 2225.],
+                                  [2225., 2325.],
+                                  [2325., 2425.],
+                                  [2425., 2525.],
+                                  [2525., 2775.],
+                                  [2775., 3025.],
+                                  [3025., 3225.],
+                                  [3225., 3525.],
+                                  [3525., 3775.],
+                                  [3775., 4025.],
+                                  [4025., 4275.],
+                                  [4275., 4525.],
+                                  [4525., 4775.],
+                                  [4775., 5025.],
+                                  [5025., 5525.],
+                                  [5525., 6025.],
+                                  [6025., 6525.]])
+    graupel_bin_widths = np.diff(graupel_bin_edges, axis=1).flatten().T
+    # graupel_avg_diameter = np.average(graupel_bin_centers, weights=)
     temp_vmin = np.min(lear_datasets.Dew.data)
     temp_vmax = np.max(lear_datasets.Temp.data)
 else:
     lear_datasets = None
-
-
-
+    hvps_datasets = None
 
 #### Learjet video
 video_file_idx = 0
@@ -185,6 +220,23 @@ else:
     uhsas_wing_datasets = None
 
 uhsas_vmax = np.max([uhsas_cabin_datasets.Nuhsas_c.max(), uhsas_wing_datasets.Nuhsas_w.max()])
+
+
+#### Convair radar data
+convair_radar_dirs = [d for d in sorted(os.listdir('data/Houston/Convair-NAWX')) if starttime.strftime('%b').lower()+starttime.strftime('%d') in d]
+convair_radar_datasets = {}
+if len(convair_radar_dirs) > 0:
+    for d in convair_radar_dirs:
+        x_dir = os.path.join('data/Houston/Convair-NAWX', d, 'NAX')
+        for f in sorted(os.listdir(x_dir)):
+            if f.endswith('.nc'):
+                radards = xr.open_dataset(os.path.join(x_dir, f))
+                start_time = datetime.datetime.fromtimestamp(radards.time.data[0].astype('datetime64[s]').astype(int), datetime.UTC).strftime('%Y%m%d%H%M%S')
+                convair_radar_datasets[start_time] = radards
+if len(convair_radar_datasets.keys()) == 0:
+    convair_radar_datasets = None
+
+
 #### Research radar scans
 
 csapr_lon, csapr_lat = -95.283893, 29.531782
@@ -361,11 +413,22 @@ class myBlankPlot(BlankPlot):
 
         
         self.ax_lear_cwc = self.fig.add_axes([8.6/FIG_WIDTH, (FIG_HEIGHT-9.35)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
-        self.ax_lear_cwc.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_lear_cwc))
-        self.ax_lear_cwc.xaxis.set_major_locator(AutoDateLocator())
         self.ax_lear_cwc.minorticks_on()
-        self.ax_lear_cwc.set_xlabel('Time (UTC)')
-        self.ax_lear_cwc.set_ylabel('Water Content ($\\frac{g}{m^{3}}$)')
+        self.ax_lear_cwc.set_xlabel('Temperature ($\\degree$C)')
+        self.ax_lear_cwc.set_ylabel('Riming Accretion Rate ($\\frac{g}{m^{2} s}$)')
+        reversalLineX = np.linspace(-30, -1, 35)
+        reversalLineY = (1 
+            + 7.9262e-2*reversalLineX
+            + 4.4847e-2*reversalLineX**2
+            + 7.4754e-3*reversalLineX**3
+            + 5.4686e-4*reversalLineX**4
+            + 1.6737e-5*reversalLineX**5
+            + 1.7613e-7*reversalLineX**6)
+        self.ax_lear_cwc.plot(reversalLineX, reversalLineY, label='Saunders and Peck 1998', color='black')
+        self.ax_lear_cwc.legend()
+        self.ax_lear_cwc.set_xlim(-30, -1)
+        self.ax_lear_cwc.set_ylim(0, 4)
+        self.ax_lear_cwc.invert_xaxis()
 
         self.ax_cabin_uhsas = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-7.35)/FIG_HEIGHT, 7.055/FIG_WIDTH, 1.1/FIG_HEIGHT])
         self.ax_cabin_uhsas.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_cabin_uhsas))
@@ -383,6 +446,24 @@ class myBlankPlot(BlankPlot):
         self.ax_wing_uhsas.set_xlabel('Time (UTC)')
         self.ax_wing_uhsas.set_ylabel('Diameter ($\\mu$m)')
         self.ax_wing_uhsas.set_title('UHSAS (Aircraft Wing)')
+
+
+        self.ax_convair_radar_z = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-2.6)/FIG_HEIGHT, 7.055/FIG_WIDTH, 2.2/FIG_HEIGHT])
+        self.ax_convair_radar_z.set_title('NRC Canada Convair Data\nRadar Reflectivity')
+        self.ax_convair_radar_z.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_convair_radar_z))
+        self.ax_convair_radar_z.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_convair_radar_z.minorticks_on()
+        self.ax_convair_radar_z.set_xlabel('Time (UTC)')
+        self.ax_convair_radar_z.set_ylabel('Altitude (km)')
+
+        self.ax_convair_radar_v = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-5.5)/FIG_HEIGHT, 7.055/FIG_WIDTH, 2.2/FIG_HEIGHT])
+        self.ax_convair_radar_v.set_title('Doppler Velocity')
+        self.ax_convair_radar_v.xaxis.set_major_formatter(FractionalSecondFormatter(self.ax_convair_radar_v))
+        self.ax_convair_radar_v.xaxis.set_major_locator(AutoDateLocator())
+        self.ax_convair_radar_v.minorticks_on()
+        self.ax_convair_radar_v.set_xlabel('Time (UTC)')
+        self.ax_convair_radar_v.set_ylabel('Altitude (km)')
+
 
         self.cax_1 = self.fig.add_axes([1.1/FIG_WIDTH, (FIG_HEIGHT-13.25)/FIG_HEIGHT, 5.525/FIG_WIDTH, 0.01])
         self.cax_2 = self.fig.add_axes([16.5/FIG_WIDTH, (FIG_HEIGHT-13.25)/FIG_HEIGHT, 7.055/FIG_WIDTH, 0.01])
@@ -523,7 +604,8 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
                 if len(this_aerosol_data.bin_lower_uhsas_c.data) > 0 and np.all(this_aerosol_data.bin_lower_uhsas_c.data[0, 1:] == this_aerosol_data.bin_upper_uhsas_c.data[0, :-1]):
                     bin_sequence = np.append(this_aerosol_data.bin_lower_uhsas_c.data[0, :], this_aerosol_data.bin_upper_uhsas_c.data[0, -1])
                     time_edges = np.append(this_aerosol_data.time.data, this_aerosol_data.time.data[-1] + np.diff(this_aerosol_data.time.data)[-1])
-                    dsdhandle = self.lma_plot.ax_cabin_uhsas.pcolormesh(time_edges, bin_sequence, this_aerosol_data.Nuhsas_c.data, cmap='viridis', norm=pltcolors.LogNorm(vmin=1, vmax=uhsas_vmax))
+                    conc = 60*this_aerosol_data.Nuhsas_c.data/(this_aerosol_data.sampleflow_uhsas_c.data.T)
+                    dsdhandle = self.lma_plot.ax_cabin_uhsas.pcolormesh(time_edges, bin_sequence, conc, cmap='inferno', norm=pltcolors.LogNorm(vmin=1, vmax=uhsas_vmax))
                     self.lma_plot.fig.colorbar(dsdhandle, cax=self.lma_plot.cax_2, orientation='horizontal', label='Count per bin')
                 else:
                     dsdhandle = self.lma_plot.ax_cabin_uhsas.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_cabin_uhsas.transAxes)
@@ -541,7 +623,8 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
                 if len(this_aerosol_data.bin_lower_uhsas_w.data) > 0 and np.all(this_aerosol_data.bin_lower_uhsas_w.data[0, 1:] == this_aerosol_data.bin_upper_uhsas_w.data[0, :-1]):
                     bin_sequence = np.append(this_aerosol_data.bin_lower_uhsas_w.data[0, :], this_aerosol_data.bin_upper_uhsas_w.data[0, -1])
                     time_edges = np.append(this_aerosol_data.time.data, this_aerosol_data.time.data[-1] + np.diff(this_aerosol_data.time.data)[-1])
-                    dsdhandle = self.lma_plot.ax_wing_uhsas.pcolormesh(time_edges, bin_sequence, this_aerosol_data.Nuhsas_w.data, cmap='viridis', norm=pltcolors.LogNorm(vmin=1, vmax=uhsas_vmax))
+                    conc = 60*this_aerosol_data.Nuhsas_w.data/(this_aerosol_data.sampleflow_uhsas_w.data.T)
+                    dsdhandle = self.lma_plot.ax_wing_uhsas.pcolormesh(time_edges, bin_sequence, conc, cmap='inferno', norm=pltcolors.LogNorm(vmin=1, vmax=uhsas_vmax))
                     self.lma_plot.fig.colorbar(dsdhandle, cax=self.lma_plot.cax_2, orientation='horizontal', label='Count per bin')
                 else:
                     dsdhandle = self.lma_plot.ax_wing_uhsas.text(0.5, 0.5, 'No UHSAS data', ha='center', va='center', transform=self.lma_plot.ax_wing_uhsas.transAxes)
@@ -619,15 +702,84 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
         if lear_datasets is not None:
             this_time_lear_data = lear_datasets.sel(time=slice(tlim[0], tlim[1]))
             if this_time_lear_data.time.shape[0] > 0:
+                rar = this_time_lear_data.NevLWC.data * (343 * (0.3)**0.6)/100#term fall speed of 0.3 cm particle in m/s
+                rar[rar <= 0] = np.nan
+                lear_cwc = self.lma_plot.ax_lear_cwc.scatter(this_time_lear_data.Temp.data, rar, s=10, c=this_time_lear_data.time.data, cmap='viridis')
                 lear_temp = self.lma_plot.ax_lear_td.plot(this_time_lear_data.time.data, this_time_lear_data.Temp.data, color='red')
                 lear_dew = self.lma_plot.ax_lear_td.plot(this_time_lear_data.time.data, this_time_lear_data.Dew.data, color='lime')
                 self.lma_plot.ax_lear_td.set_xlim(tlim[0], tlim[1])
                 self.lma_plot.ax_lear_td.set_ylim(temp_vmin, temp_vmax)
+                self.data_artists.append(lear_cwc)
                 self.data_artists.extend(lear_temp)
                 self.data_artists.extend(lear_dew)
             else:
+                lear_cwc = self.lma_plot.ax_lear_cwc.text(0.5, 0.5, 'No Learjet data', ha='center', va='center', transform=self.lma_plot.ax_lear_cwc.transAxes)
                 lear_temp = self.lma_plot.ax_lear_td.text(0.5, 0.5, 'No Learjet data', ha='center', va='center', transform=self.lma_plot.ax_lear_td.transAxes)
+                self.data_artists.append(lear_cwc)
                 self.data_artists.append(lear_temp)
+        if convair_radar_datasets is not None:
+            this_convair_dataset_time = [datetime.datetime.strptime(key, '%Y%m%d%H%M%S') for key in convair_radar_datasets.keys()]
+            this_convair_dataset_time = np.array(this_convair_dataset_time)
+            this_convair_dataset_time = this_convair_dataset_time[np.where(this_convair_dataset_time < tlim[0])]
+            if len(this_convair_dataset_time) > 0:
+                this_convair_dataset_time = this_convair_dataset_time[-1]
+                this_convair_dataset = convair_radar_datasets[this_convair_dataset_time.strftime('%Y%m%d%H%M%S')]
+                up = None
+                down = None
+                var_i_want = 'naxbeamvector'
+                for var in this_convair_dataset.data_vars:
+                    if 'vector' in var:
+                        var_i_want = var
+                        break
+                if 'beam' in this_convair_dataset.dims:
+                    for beamnum in this_convair_dataset.beam.data:
+                        this_beam = this_convair_dataset.sel(beam=beamnum)
+                        zdir = np.mean(this_beam[var_i_want].data[:, -1])
+                        if zdir > 0.25:
+                            up = this_beam.isel(np=beamnum-1, nv=beamnum-1)
+                        elif zdir < -0.25:
+                            down = this_beam.isel(np=beamnum-1, nv=beamnum-1)
+                else:
+                    zdir = np.mean(this_convair_dataset[var_i_want].data[:, -1])
+                    if zdir > 0.25:
+                        up = this_convair_dataset
+                    elif zdir < -0.25:
+                        down = this_convair_dataset
+
+                if up is not None:
+                    time_up_edges = centers_to_edges(up.time.data.astype(np.int64)).astype('datetime64[ns]')
+                    range_up_edges = centers_to_edges(up.range.data)
+                    height2d_up = (centers_to_edges(up.ALT.data) + range_up_edges.reshape(range_up_edges.shape[0], 1))
+                    times2d_up = np.tile(time_up_edges, (height2d_up.shape[0], 1))
+
+                    dBZ_up = 10*np.log10(up.reflectivity.data)
+                    handle = self.lma_plot.ax_convair_radar_z.pcolormesh(times2d_up, height2d_up, dBZ_up.T, cmap='pyart_ChaseSpectral', vmin=-10, vmax=80)
+                    self.data_artists.append(handle)
+                    vel_up = up.velocity.data
+                    vel_up[up.reflectivity_mask.data == 0] = np.nan
+                    handle = self.lma_plot.ax_convair_radar_v.pcolormesh(times2d_up, height2d_up, vel_up.T, cmap='pyart_balance', vmin=-25, vmax=25)
+                    self.data_artists.append(handle)
+
+                if down is not None:
+                    time_down_edges = centers_to_edges(down.time.data.astype(np.int64)).astype('datetime64[ns]')
+                    range_down_edges = centers_to_edges(down.range.data)
+                    height2d_down = (centers_to_edges(down.ALT.data) - range_down_edges.reshape(range_down_edges.shape[0], 1))
+                    times2d_down = np.tile(time_down_edges, (height2d_down.shape[0], 1))
+                    
+                    dBZ_down = 10*np.log10(down.reflectivity.data)
+                    handle = self.lma_plot.ax_convair_radar_z.pcolormesh(times2d_down, height2d_down, dBZ_down.T, cmap='pyart_ChaseSpectral', vmin=-10, vmax=80)
+                    self.data_artists.append(handle)
+                    vel_down = down.velocity.data
+                    vel_down[down.reflectivity_mask.data == 0] = np.nan
+                    handle = self.lma_plot.ax_convair_radar_v.pcolormesh(times2d_down, height2d_down, vel_down.T, cmap='pyart_balance', vmin=-25, vmax=25)
+                    self.data_artists.append(handle)
+
+                self.lma_plot.ax_convair_radar_z.set_ylim(0, 12000)
+                self.lma_plot.ax_convair_radar_z.set_xlim(tlim[0], tlim[1])
+
+                self.lma_plot.ax_convair_radar_v.set_ylim(0, 12000)
+                self.lma_plot.ax_convair_radar_v.set_xlim(tlim[0], tlim[1])
+
 
 interactive_lma = AnnotatedLMAPlot(ds, tlim=tlim)
 
