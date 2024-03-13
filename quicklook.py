@@ -20,6 +20,7 @@ from act.io import read_icartt
 import pandas as pd
 from pyxlma.plot.xlma_base_plot import BlankPlot, FractionalSecondFormatter
 from pyxlma.plot.interactive import InteractiveLMAPlot, event_space_time_limits
+from pyxlma.plot import lma_intercept_rhi
 import sys
 import nexradaws
 import pyart
@@ -28,7 +29,8 @@ from pathlib import Path
 import os
 import re
 from cartopy import crs as ccrs
-from pyxlma.coords import RadarCoordinateSystem
+from metpy.plots import USCOUNTIES
+from pyxlma.coords import RadarCoordinateSystem, GeographicSystem
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -289,12 +291,31 @@ if len(csapr_scan_csv_filenames) > 0:
 else:
     csapr = None
 
+csapr_data_path = os.path.join('data', 'Houston', 'CSAPR-2')
+if os.path.exists(csapr_data_path):
+    csapr_filenames = [f for f in sorted(os.listdir(csapr_data_path)) if starttime.strftime('%Y%m%d') in f and f.endswith('.nc')]
+    csapr_filenames_tomorrow = [f for f in sorted(os.listdir(csapr_data_path)) if tomorrow_date.strftime('%Y%m%d') in f and f.endswith('.nc')]
+    csapr_filenames.extend(csapr_filenames_tomorrow)
+else:
+    csapr_filenames = []
+csapr_times = [datetime.datetime.strptime(f.split('.')[2]+'_'+f.split('.')[3], '%Y%m%d_%H%M%S') for f in csapr_filenames]
+csapr_times = np.array(csapr_times)
+
 if px_1k_csv_filename is not None:
     px1k = pd.read_csv(px_1k_csv_filename, parse_dates=['date_time_start', 'date_time_end'])
     if 'sweep angle range' not in px1k.columns:
         px1k['sweep angle range'] =  pd.Series(['n/a']*len(px1k))
 else:
     px1k = None
+
+px1k_data_path_today = os.path.join('data', 'Houston', 'PX1K', starttime.strftime('%Y%m%d'))
+if os.path.exists(px1k_data_path_today):
+    px1k_filenames = [f for f in sorted(os.listdir(px1k_data_path_today)) if f.endswith('.nc')]
+else:
+    px1k_filenames = []
+px1k_times = [datetime.datetime.strptime(f.split('.')[1], '%Y%m%d_%H%M%S') for f in px1k_filenames]
+px1k_times = np.array(px1k_times)
+
 
 if raxpol_csv_filename is not None:
     raxpol = pd.read_csv(raxpol_csv_filename, parse_dates=['date_time_start', 'date_time_end'])
@@ -303,12 +324,29 @@ if raxpol_csv_filename is not None:
 else:
     raxpol = None
 
+rax_data_path_today = os.path.join('data', 'Houston', 'RAXPOL', starttime.strftime('%Y%m%d'))
+if os.path.exists(rax_data_path_today):
+    rax_filenames = [f for f in sorted(os.listdir(rax_data_path_today)) if f.endswith('.nc')]
+else:
+    rax_filenames = []
+rax_times = [datetime.datetime.strptime(f.split('.')[1], '%Y%m%d_%H%M%S') for f in rax_filenames]
+rax_times = np.array(rax_times)
+
 if skyler_csv_filename is not None:
     skyler = pd.read_csv(skyler_csv_filename, parse_dates=['date_time_start', 'date_time_end'])
     if 'sweep angle range' not in skyler.columns:
         skyler['sweep angle range'] =  pd.Series(['n/a']*len(skyler))
 else:
     skyler = None
+
+skyler_data_path = os.path.join('data', 'Houston', 'SKYLER')
+if os.path.exists(skyler_data_path):
+    skyler_filenames = [f for f in sorted(os.listdir(skyler_data_path)) if starttime.strftime('%Y%m%d') in f and f.endswith('.nc')]
+else:
+    skyler_filenames = []
+skyler_times = [datetime.datetime.strptime(f.split('_')[3]+'_'+f.split('_')[4], '%Y%m%d_%H%M%S') for f in skyler_filenames]
+skyler_times = np.array(skyler_times)
+print(skyler_times)
 
 def load_lear_track(lear_track_filename):
     lear_track_df = pd.read_csv(lear_track_filename, sep='\s+', 
@@ -463,6 +501,19 @@ class myBlankPlot(BlankPlot):
         self.ax_convair_radar_v.minorticks_on()
         self.ax_convair_radar_v.set_xlabel('Time (UTC)')
         self.ax_convair_radar_v.set_ylabel('Altitude (km)')
+
+
+        self.csapr_ax = self.fig.add_axes([.85/FIG_WIDTH, (FIG_HEIGHT-12.2)/FIG_HEIGHT, 5.5/FIG_WIDTH, 2.2/FIG_HEIGHT])
+        self.csapr_ax.set_title('CSAPR-2')
+
+        self.px1k_ax = self.fig.add_axes([6.55/FIG_WIDTH, (FIG_HEIGHT-12.2)/FIG_HEIGHT, 5.5/FIG_WIDTH, 2.2/FIG_HEIGHT])
+        self.px1k_ax.set_title('PX-1000')
+
+        self.rax_ax = self.fig.add_axes([12.25/FIG_WIDTH, (FIG_HEIGHT-12.2)/FIG_HEIGHT, 5.5/FIG_WIDTH, 2.2/FIG_HEIGHT])
+        self.rax_ax.set_title('RaXPol')
+
+        self.skyler_ax = self.fig.add_axes([17.95/FIG_WIDTH, (FIG_HEIGHT-12.2)/FIG_HEIGHT, 5.5/FIG_WIDTH, 2.2/FIG_HEIGHT])
+        self.skyler_ax.set_title('SKYLER-II')
 
 
         self.cax_1 = self.fig.add_axes([1.1/FIG_WIDTH, (FIG_HEIGHT-13.25)/FIG_HEIGHT, 5.525/FIG_WIDTH, 0.01])
@@ -704,7 +755,7 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
             if this_time_lear_data.time.shape[0] > 0:
                 rar = this_time_lear_data.NevLWC.data * (343 * (0.3)**0.6)/100#term fall speed of 0.3 cm particle in m/s
                 rar[rar <= 0] = np.nan
-                lear_cwc = self.lma_plot.ax_lear_cwc.scatter(this_time_lear_data.Temp.data, rar, s=10, c=this_time_lear_data.time.data, cmap='viridis')
+                lear_cwc = self.lma_plot.ax_lear_cwc.scatter(this_time_lear_data.Temp.data, rar, s=10, c=this_time_lear_data.time.data, cmap='plasma')
                 lear_temp = self.lma_plot.ax_lear_td.plot(this_time_lear_data.time.data, this_time_lear_data.Temp.data, color='red')
                 lear_dew = self.lma_plot.ax_lear_td.plot(this_time_lear_data.time.data, this_time_lear_data.Dew.data, color='lime')
                 self.lma_plot.ax_lear_td.set_xlim(tlim[0], tlim[1])
@@ -779,6 +830,84 @@ class AnnotatedLMAPlot(InteractiveLMAPlot):
 
                 self.lma_plot.ax_convair_radar_v.set_ylim(0, 12000)
                 self.lma_plot.ax_convair_radar_v.set_xlim(tlim[0], tlim[1])
+        lma_data_in_timerange = self.ds.isel(number_of_events=self.this_lma_sel)
+        for radar_times, radar_filenames, radar_name, radar_ax, radar_data_path, radar_var in zip(
+                (csapr_times, px1k_times, rax_times), (csapr_filenames, px1k_filenames, rax_filenames), ('CSAPR-2', 'PX-1000', 'RaXPol'),
+                (self.lma_plot.csapr_ax, self.lma_plot.px1k_ax, self.lma_plot.rax_ax), (csapr_data_path, px1k_data_path_today, rax_data_path_today),
+                ('reflectivity', 'DBZ', 'DBZ')):
+            if len(radar_times) > 0:
+                radar_times_in_range = (radar_times > tlim[0]) & (radar_times < tlim[1])
+                radar_i_want = sorted(np.array(radar_filenames)[radar_times_in_range])
+                if len(radar_i_want) > 0:
+                    radar_i_want = radar_i_want[-1]
+                else:
+                    continue
+                this_radar = pyart.io.read(os.path.join(radar_data_path, radar_i_want))
+                radar_lon = this_radar.longitude['data'][0]
+                radar_lat = this_radar.latitude['data'][0]
+                radar_alt = this_radar.altitude['data'][0]
+                if this_radar.scan_type == 'ppi':
+                    rmd = pyart.graph.RadarMapDisplay(this_radar)
+                    radar_ax_pos = radar_ax.get_position()
+                    plt.delaxes(radar_ax)
+                    radar_ax = plt.axes(projection=ccrs.PlateCarree(), position=[radar_ax_pos.x0, radar_ax_pos.y0, radar_ax_pos.width, radar_ax_pos.height])
+                    rmd.plot_ppi_map(radar_var, 0, vmin=-10, vmax=80, cmap='pyart_ChaseSpectral', ax=radar_ax, embellish=False, colorbar_flag=False, lat_lines=[], lon_lines=[])
+                    radar_ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='black', linewidth=0.5)
+                    radar_ax.set_title(f'{radar_name} {np.median(this_radar.elevation["data"]):.1f}° PPI')
+                    radar_ax_ext = radar_ax.get_extent()
+                    radar_ax.scatter(lma_data_in_timerange.event_longitude.data, lma_data_in_timerange.event_latitude.data, s=1, c=lma_data_in_timerange.event_time.data, cmap='plasma', zorder=10, transform=ccrs.PlateCarree())
+                    radar_ax.set_extent(radar_ax_ext, crs=ccrs.PlateCarree())
+                elif this_radar.scan_type == 'rhi':
+                    rmd = pyart.graph.RadarMapDisplay(this_radar)
+                    rmd.plot_rhi(radar_var, 0, vmin=-10, vmax=80, cmap='pyart_ChaseSpectral', ax=radar_ax, colorbar_flag=False)
+                    lma_range, lma_distance, lma_arl, lma_mask = lma_intercept_rhi.find_points_near_rhi(lma_data_in_timerange, radar_lat, radar_lon, radar_alt,
+                                                                                                    np.median(np.array(this_radar.azimuth['data'])), pyart.util.datetime_from_radar(this_radar), time_threshold=30)
+                    if np.sum(lma_mask.astype(int)) > 0:
+                        radar_ax.scatter(lma_range, lma_arl, s=1, c=lma_data_in_timerange.event_time.data[lma_mask], cmap='plasma', zorder=10)
+                    radar_ax.set_title(f'{radar_name} {np.median(this_radar.azimuth["data"]):.1f}° RHI')
+        if len(skyler_times) > 0:
+            radar_times_in_range = (skyler_times > tlim[0]) & (skyler_times < tlim[1])
+            radar_i_want = sorted(np.array(skyler_filenames)[radar_times_in_range])
+            if len(radar_i_want) > 0:
+                radar_i_want = radar_i_want[-1]
+                radar_time = sorted(skyler_times[radar_times_in_range])[-1]
+                this_skyler = xr.open_dataset(os.path.join(skyler_data_path, radar_i_want))
+                if this_skyler.azimuth_flag.data[0] == 0:
+                    skyler_loc_lat = this_skyler.latitude.data[0]
+                    skyler_loc_lon = this_skyler.longitude.data[0]
+                    skyler_loc_alt = this_skyler.altitude.data[0]
+                    rcs = RadarCoordinateSystem(skyler_loc_lat, skyler_loc_lon, this_skyler.altitude.data[0])
+                    azimuth_1d = this_skyler.azimuth.data
+                    r_edges = centers_to_edges(this_skyler.range.data)
+                    az_edges = centers_to_edges(azimuth_1d)
+                    el_edges = centers_to_edges(this_skyler.elevation.data)
+                    _, el = np.meshgrid(r_edges, el_edges)
+                    r_edges_2d, az_edges_2d = np.meshgrid(r_edges, az_edges)
+                    skyler_ecef_coords = rcs.toECEF(r_edges_2d, az_edges_2d, el)
+                    geosys = GeographicSystem()
+                    skyler_lon, skyler_lat, skyler_alt = geosys.fromECEF(*skyler_ecef_coords)
+                    skyler_lon = skyler_lon.reshape(r_edges_2d.shape)
+                    skyler_lat = skyler_lat.reshape(r_edges_2d.shape)
+                    skyler_alt = skyler_alt.reshape(r_edges_2d.shape)
+                    if this_skyler.attrs['scan_type'] == 'ppi':
+                        skyler_ax_pos = self.lma_plot.skyler_ax.get_position()
+                        plt.delaxes(self.lma_plot.skyler_ax)
+                        self.lma_plot.skyler_ax = plt.axes(projection=ccrs.PlateCarree(), position=[skyler_ax_pos.x0, skyler_ax_pos.y0, skyler_ax_pos.width, skyler_ax_pos.height])
+                        self.lma_plot.skyler_ax.pcolormesh(skyler_lon, skyler_lat, this_skyler.corrected_reflectivity, vmin=-10, vmax=80, cmap='pyart_ChaseSpectral')
+                        self.lma_plot.skyler_ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
+                        skyler_ax_ext = self.lma_plot.skyler_ax.get_extent()
+                        self.lma_plot.skyler_ax.scatter(lma_data_in_timerange.event_longitude.data, lma_data_in_timerange.event_latitude.data, s=1, c=lma_data_in_timerange.event_time.data, cmap='plasma', zorder=10, transform=ccrs.PlateCarree())
+                        self.lma_plot.skyler_ax.set_extent(skyler_ax_ext, crs=ccrs.PlateCarree())
+                        self.lma_plot.skyler_ax.set_title(f'SKYLER-II {np.median(this_skyler.elevation):.1f}° PPI')
+                    elif this_skyler.attrs['scan_type'] == 'rhi':
+                        self.lma_plot.skyler_ax.pcolormesh(r_edges_2d/1000, skyler_alt/1000, this_skyler.corrected_reflectivity, vmin=-10, vmax=80, cmap='pyart_ChaseSpectral')
+                        self.lma_plot.skyler_ax.set_xlabel('Distance from radar (km)')
+                        self.lma_plot.skyler_ax.set_ylabel('Distance above radar (km)')
+                        lma_range, lma_distance, lma_arl, lma_mask = lma_intercept_rhi.find_points_near_rhi(lma_data_in_timerange, skyler_loc_lat, skyler_loc_lon, skyler_loc_alt,
+                                                                                                    np.median(azimuth_1d), radar_time, time_threshold=30)
+                        if np.sum(lma_mask.astype(int)) > 0:
+                            self.lma_plot.skyler_ax.scatter(lma_range, lma_arl, s=1, c=lma_data_in_timerange.event_time.data[lma_mask], cmap='plasma', zorder=10)
+                        self.lma_plot.skyler_ax.set_title(f'SKYLER-II {np.median(this_skyler.azimuth):.1f}° RHI')
 
 
 interactive_lma = AnnotatedLMAPlot(ds, tlim=tlim)
@@ -812,10 +941,12 @@ if animation_output_directory is not None:
     for iframe, tlimi in enumerate(time_limits):
         ti0 = tlimi[0].strftime('%Y%m%d_%H%M%S')
         filename = os.path.join(f"{animation_output_directory}", f"LMA_aircraft_radar_{ti0}.png")
-        interactive_lma.lma_plot.ax_th.set_xlim(tlimi)
-        interactive_lma.lma_plot.fig.canvas.draw()
-        interactive_lma.lma_plot.fig.savefig(filename)
         if (iframe % 25) == 0:
             print(iframe)
             print(filename)
+        if os.path.exists(filename):
+            continue
+        interactive_lma.lma_plot.ax_th.set_xlim(tlimi)
+        interactive_lma.lma_plot.fig.canvas.draw()
+        interactive_lma.lma_plot.fig.savefig(filename)
 
