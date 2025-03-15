@@ -707,12 +707,8 @@ def main(args):
     cell_dim = "cell"
     feature_dim = "feature"
 
-    print('='*50)
-    print(np.all(np.array(list(feature_zdrvol.keys())) == np.array(list(feature_kdpvol.keys()))))
-    print(np.all(np.array(list(feature_zdrvol.keys())) == np.array(list(flash_count_arr.keys()))))
-    print(np.all(np.array(list(feature_zdrvol.keys())) == xrdata["feature"].values))
-    print(np.all(np.unique(list(feature_zdrvol.keys())) == np.unique(xrdata["feature"].values)))
-    print('='*50)
+    xrdata = xrdata.sel(feature=np.array(list(feature_zdrvol.keys())))
+
     
     test = xr.Dataset(
         {
