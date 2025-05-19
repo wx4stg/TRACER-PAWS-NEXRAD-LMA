@@ -445,8 +445,11 @@ def main(args):
     feature_kdpvol = dict()
     feature_rhvdeficitvol = dict()
     flash_count_arr = dict()
-    area_LE_4km = dict()
-    area_GT_4km = dict()
+    flash_count_area_LE_4km = dict()
+    flash_count_area_GT_4km = dict()
+    flash_density_arr = dict()
+    flash_density_area_LE_4km = dict()
+    flash_density_area_GT_4km = dict()
     feature_zdrcol_max = dict()
     feature_kdpcol_max = dict()
     feature_rhvdeficitcol_max = dict()
@@ -641,8 +644,11 @@ def main(args):
 
             if len(xy[0]) <= 0:
                 flash_count_arr[f] = 0
-                area_LE_4km[f] = 0
-                area_GT_4km[f] = 0
+                flash_count_area_LE_4km[f] = 0
+                flash_count_area_GT_4km[f] = 0
+                flash_density_arr[f] = 0
+                flash_density_area_LE_4km[f] = 0
+                flash_density_area_GT_4km[f] = 0
                 continue
             else:
                 for ndd in range(len(xy[0])):
@@ -677,13 +683,19 @@ def main(args):
                             flash_gt4 += 1
 
                 if flash_count > 0:
-                    flash_count_arr[f] = flash_count / dt
-                    area_LE_4km[f] = flash_le4 / dt
-                    area_GT_4km[f] = flash_gt4 / dt
+                    flash_count_arr[f] = flash_count
+                    flash_count_area_LE_4km[f] = flash_le4
+                    flash_count_area_GT_4km[f] = flash_gt4
+                    flash_density_arr[f] = flash_count / dt
+                    flash_density_area_LE_4km[f] = flash_le4 / dt
+                    flash_density_area_GT_4km[f] = flash_gt4 / dt
                 else:
                     flash_count_arr[f] = 0
-                    area_LE_4km[f] = 0
-                    area_GT_4km[f] = 0
+                    flash_count_area_LE_4km[f] = 0
+                    flash_count_area_GT_4km[f] = 0
+                    flash_density_arr[f] = 0
+                    flash_density_area_LE_4km[f] = 0
+                    flash_density_area_GT_4km[f] = 0
         print("Cleaning memory")
         del kdpvol, zdrvol, kdpcol, zdrcol
         gc.collect()
@@ -733,8 +745,11 @@ def main(args):
             "feature_kdpwt_total": (feature_dim, xr.DataArray(list(feature_kdpwcol_total.values()), coords={'feature':list(feature_kdpwcol_total.keys())}).data),
             "feature_rhvdeficitwt_total": (feature_dim, xr.DataArray(list(feature_rhvdeficitwcol_total.values()), coords={'feature':list(feature_rhvdeficitwcol_total.keys())}).data),
             "feature_flash_count": (feature_dim, xr.DataArray(list(flash_count_arr.values()), coords={'feature':list(flash_count_arr.keys())}).data),
-            "feature_area_LE_4km": (feature_dim, xr.DataArray(list(area_LE_4km.values()), coords={'feature':list(area_LE_4km.keys())}).data),
-            "feature_area_GT_4km": (feature_dim, xr.DataArray(list(area_GT_4km.values()), coords={'feature':list(area_GT_4km.keys())}).data),
+            "feature_flash_count_area_LE_4km": (feature_dim, xr.DataArray(list(flash_count_area_LE_4km.values()), coords={'feature':list(flash_count_area_LE_4km.keys())}).data),
+            "feature_flash_count_area_GT_4km": (feature_dim, xr.DataArray(list(flash_count_area_GT_4km.values()), coords={'feature':list(flash_count_area_GT_4km.keys())}).data),
+            "feature_flash_density": (feature_dim, xr.DataArray(list(flash_density_arr.values()), coords={'feature':list(flash_density_arr.keys())}).data),
+            "feature_flash_density_area_LE_4km": (feature_dim, xr.DataArray(list(flash_density_area_LE_4km.values()), coords={'feature':list(flash_density_area_LE_4km.keys())}).data),
+            "feature_flash_density_area_GT_4km": (feature_dim, xr.DataArray(list(flash_density_area_GT_4km.values()), coords={'feature':list(flash_density_area_GT_4km.keys())}).data)
         }
 
     ).set_coords(['feature', 'cell', 'track'])
@@ -742,9 +757,6 @@ def main(args):
     
     # Clean up a couple other things. This could be fixed above, too...
     test['feature_area'] = test.feature_area/(.5*.5) # Undo the conversion to km^2
-    test['feature_flash_count_area_LE_4km'] = test.feature_area_LE_4km
-    test['feature_flash_count_area_GT_4km'] = test.feature_area_GT_4km
-    test = test.drop_vars(('feature_area_LE_4km','feature_area_GT_4km'))
 
     # -1 was being used insteaed of 0. For these variables, we want zero since it
     # indicates the value of the observed quantity, not the absence of a measurement.
