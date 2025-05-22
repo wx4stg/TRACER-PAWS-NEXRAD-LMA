@@ -1,11 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# MODIFIED 
-# 20230502: KNB
-# 20230630: ECB
-
 import argparse
+import os
 
 
 parse_desc = """Find features, track, and plot all nexrad data in a given destination folder
@@ -17,6 +14,7 @@ path: path to the radar data, currently only NEXRAD data is supported in this ve
 lmapath: path to the lma flash sorted data
 tobacpath: path to the tobac feature, track etc. netcdf files.
 type: Name of the type of data (NEXRAD/POLARRIS/NUWRF) given as all uppercase string. Currently only NEXRAD is supported.
+debug: specify to enable additional logging.
 
 
 Example
@@ -42,34 +40,6 @@ feature_kdpwt_total - the total Kdp values in the feature, occurring between the
 feature_zdrwt_total - the total Zdr values in the feature, occurring between the melting level and 1km below the freezing level, weighted by its height above the melting level.
 
 """
-
-import linecache
-import os
-import tracemalloc
-
-def display_top(snapshot, key_type='lineno', limit=10):
-    snapshot = snapshot.filter_traces((
-        tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
-        tracemalloc.Filter(False, "<unknown>"),
-    ))
-    top_stats = snapshot.statistics(key_type)
-
-    print("Top %s lines" % limit)
-    for index, stat in enumerate(top_stats[:limit], 1):
-        frame = stat.traceback[0]
-        print("#%s: %s:%s: %.1f KiB"
-              % (index, frame.filename, frame.lineno, stat.size / 1024))
-        line = linecache.getline(frame.filename, frame.lineno).strip()
-        if line:
-            print('    %s' % line)
-
-    other = top_stats[limit:]
-    if other:
-        size = sum(stat.size for stat in other)
-        print("%s other: %.1f KiB" % (len(other), size / 1024))
-    total = sum(stat.size for stat in top_stats)
-    print("Total allocated size: %.1f KiB" % (total / 1024))
-
 
 
 def create_parser():
@@ -134,6 +104,11 @@ def create_parser():
         action="store",
         help="Datat name type, e.g., NEXRAD, POLARRIS, NUWRF",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
     return parser
 
 
@@ -144,8 +119,6 @@ def create_parser():
 import numpy as np
 import warnings
 import xarray as xr
-import random
-from scipy import ndimage
 from datetime import datetime
 
 try:
@@ -169,12 +142,7 @@ from netCDF4 import Dataset
 import pyart
 from scipy import ndimage as ndi
 from scipy import spatial
-from skimage.segmentation import watershed
-from skimage.feature import peak_local_max
-from geopy.distance import geodesic, great_circle
-import os
-from scipy.interpolate import griddata
-from pandas.core.common import flatten
+from geopy.distance import great_circle
 import warnings
 
 from pyxlma.lmalib.traversal import OneToManyTraversal
@@ -354,7 +322,7 @@ def main(args):
     lma_flash_time = []
     lma_area = []
     for i, j in enumerate(lmafiles):
-        print(j)
+        print(f'Reading LMA: {j}')
         lmadata1 = xr.open_dataset(j)
         lmadata1 = lmadata1.rename({"grid_time": "time"})
         if i == 0:
@@ -382,7 +350,6 @@ def main(args):
     reduced_track_ids = np.unique(xrdata[{'feature':feature_is_bright}].feature_parent_track_id)
     traversal = OneToManyTraversal(xrdata, ('track','cell','feature'), ('cell_parent_track_id', 'feature_parent_cell_id'))
     xrdata = traversal.reduce_to_entities('track', reduced_track_ids)
-    print('reduced')
     path = args.path + "*grid.nc"
 
     data = xr.open_mfdataset(path)
@@ -392,7 +359,6 @@ def main(args):
     nclat = nc_grid["point_latitude"][0, :, :].data
 
     ref = 10
-    rhv = 0.9
     rhv_col_thresh = 0.98
     kdp_min = 0.75
     zdr_min = 1.0
@@ -419,8 +385,6 @@ def main(args):
     deltaz = data["z"][1:].values - data["z"][:-1].values
     dxy = np.abs(np.mean(deltax)) / 1000
     dz = np.abs(np.mean(deltaz)) / 1000
-    print("Mean spacing of data in x:", dxy)
-    print("Mean spacing of data in z:", dz)
     grid_box_vol = dz * dxy * dxy
 
     val = pd.to_datetime(xrdata["time"].values)
@@ -463,44 +427,7 @@ def main(args):
     feature_kdpwcol_total = dict()
     feature_rhvdeficitwcol_total = dict()
     x_mesh,z_mesh,y_mesh = np.meshgrid(data['x'],data['z'],data['y'])
-    rhgt = (
-        np.array(
-            [
-                0,
-                0.5,
-                1,
-                1.5,
-                2,
-                2.5,
-                3,
-                3.5,
-                4,
-                4.5,
-                5,
-                5.5,
-                6,
-                6.5,
-                7,
-                7.5,
-                8,
-                8.5,
-                9,
-                9.5,
-                10,
-                10.5,
-                11,
-                11.5,
-                12,
-                12.5,
-                13,
-                13.5,
-                14,
-                14.5,
-                15,
-            ]
-        )
-        * 1000.0
-    )
+    rhgt = np.arange(0, 15.1, 0.5) * 1000.0
 
     # Find the index in rhgt that correponds to the melting level given in the command line
     meltlev = args.meltinglev*1000.0
@@ -509,14 +436,12 @@ def main(args):
     indfrz = np.argmin(np.absolute(rhgt - frzlev))
     del data
     start = time.time()
-     
-    print(np.nanmax(np.unique(xrdata["feature_time_index"].values)))
-    print(np.nanmax(xrdata["feature"].values))
     
     # tracemalloc.start()
-    for num, i in enumerate(np.unique(xrdata["feature_time_index"].values)):
+    unique_time_indices = np.unique(xrdata["feature_time_index"].values)
+    for timestep_index, i in enumerate(unique_time_indices):
 
-        print(i)
+        print(f'Processing feature time index: {i}, {100*timestep_index/len(unique_time_indices):.2f} %')
 
         # if i==2:
         #     prev_snapshot = tracemalloc.take_snapshot()
@@ -542,13 +467,14 @@ def main(args):
         zdrwcol = (zdr_qc_here*z_weight_here).sum(dim="z").compute()
         rhvdeficitwcol = (rhv_deficit_qc_here*z_weight_here).sum(dim="z").compute()
         
-        ids = np.where(xrdata["feature_time_index"].values == i)
+        ids = np.where(xrdata["feature_time_index"].values == i) ###THIS MIGHT BE A PROBLEM -- USE MASKING INSTEAD
         ids = xrdata["feature"].values[ids]
         features_this_frame = xrdata["segmentation_mask"].data[i, :, :]
         
         
-        for nid, f in enumerate(ids):
-            print(f)
+        for _, f in enumerate(ids):
+            if args.debug:
+                print(f'>>>>>Processing feature {f}>>>>>')
             this_feature = (features_this_frame == f)
 
             
@@ -556,66 +482,80 @@ def main(args):
                 zdrvol.where(this_feature, other=0.0).sum().values
                 * grid_box_vol
             )
-
+            if args.debug:
+                print(f'feature_zdrvol[{f}]: {feature_zdrvol[f]}')
             feature_kdpvol[f] = (
                 kdpvol.where(this_feature, other=0.0).sum().values
                 * grid_box_vol
             )
-
+            if args.debug:
+                print(f'feature_kdpvol[{f}]: {feature_kdpvol[f]}')
             feature_rhvdeficitvol[f] = (
                 rhvdeficitvol.where(this_feature, other=0.0).sum().values
                 * grid_box_vol
             )
-
+            if args.debug:
+                print(f'feature_rhvdeficitvol[{f}]: {feature_rhvdeficitvol[f]}')
             feature_kdpcol_max[f] = kdpcol.where(
                 this_feature, other=0.0
             ).values.max()
-            
+            if args.debug:
+                print(f'feature_kdpcol_max[{f}]: {feature_kdpcol_max[f]}')
             feature_zdrcol_max[f] = zdrcol.where(
                 this_feature, other=0.0
             ).values.max()
-            
+            if args.debug:
+                print(f'feature_zdrcol_max[{f}]: {feature_zdrcol_max[f]}')
             feature_rhvdeficitcol_max[f] = rhvdeficitcol.where(
                 this_feature, other=0.0
             ).values.max()
-            
-
+            if args.debug:
+                print(f'feature_rhvdeficitcol_max[{f}]: {feature_rhvdeficitcol_max[f]}')
             feature_kdpcol_mean[f] = np.nanmean(
                 kdpcol.where(this_feature, other=0.0).values
             )
-            
+            if args.debug:
+                print(f'feature_kdpcol_mean[{f}]: {feature_kdpcol_mean[f]}')
             feature_zdrcol_mean[f] = np.nanmean(
                 zdrcol.where(this_feature, other=0.0).values
             )
-            
+            if args.debug:
+                print(f'feature_zdrcol_mean[{f}]: {feature_zdrcol_mean[f]}')
             feature_rhvdeficitcol_mean[f] = np.nanmean(
                 rhvdeficitcol.where(this_feature, other=0.0).values
             )
-
+            if args.debug:
+                print(f'feature_rhvdeficitcol_mean[{f}]: {feature_rhvdeficitcol_mean[f]}')
             feature_kdpcol_total[f] = kdpcol.where(
                 this_feature, other=0.0
             ).values.sum()
-
+            if args.debug:
+                print(f'feature_kdpcol_total[{f}]: {feature_kdpcol_total[f]}')
             feature_zdrcol_total[f] = zdrcol.where(
                 this_feature, other=0.0
             ).values.sum()
-
+            if args.debug:
+                print(f'feature_zdrcol_total[{f}]: {feature_zdrcol_total[f]}')
             feature_rhvdeficitcol_total[f] = rhvdeficitcol.where(
                 this_feature, other=0.0
             ).values.sum()
-
+            if args.debug:
+                print(f'feature_rhvdeficitcol_total[{f}]: {feature_rhvdeficitcol_total[f]}')
             feature_zdrwcol_total[f] = zdrwcol.where(
                 this_feature, other=0.0
             ).values.sum()
-            
+            if args.debug:
+                print(f'feature_zdrwcol_total[{f}]: {feature_zdrwcol_total[f]}')
             feature_kdpwcol_total[f] = kdpwcol.where(
                 this_feature, other=0.0
             ).values.sum()
-            
+            if args.debug:
+                print(f'feature_kdpwcol_total[{f}]: {feature_kdpwcol_total[f]}')
             feature_rhvdeficitwcol_total[f] = rhvdeficitwcol.where(
                 this_feature, other=0.0
             ).values.sum()
-
+            if args.debug:
+                print(f'feature_rhvdeficitwcol_total[{f}]: {feature_rhvdeficitwcol_total[f]}')
             time1 = time1_arr[i]
             time2 = time2_arr[i]
             dt = (time2 - time1) / 60
@@ -641,8 +581,11 @@ def main(args):
             dist = []
 
             xy = np.where(features_this_frame == f)  # t,y,x
-
+            if args.debug:
+                print(f'Segmentation t, y, x: {np.array(xy).shape}\n{xy}\n')
             if len(xy[0]) <= 0:
+                if args.debug:
+                    print(f'Feature {f} has no segmentation, continuing...')
                 flash_count_arr[f] = 0
                 flash_count_area_LE_4km[f] = 0
                 flash_count_area_GT_4km[f] = 0
@@ -673,8 +616,13 @@ def main(args):
                         continue
                     else:
                         if np.sqrt(areas[lp]) < 0.005:
+                            if args.debug:
+                                print(f'Flash {lp} area is too small, skipping...')
                             continue
                         else:
+                            if args.debug:
+                                print(f'Flash {lp} area: {areas[lp]}')
+                                print(f'Added flash {lp} to feature count...')
                             flash_count += 1
 
                         if np.sqrt(areas[lp]) <= 4.0:  # might be inder
@@ -683,6 +631,9 @@ def main(args):
                             flash_gt4 += 1
 
                 if flash_count > 0:
+                    if args.debug:
+                        print(f'dt was {dt} min')
+                        print(f'Feature {f} has {flash_count} flashes and {flash_count / dt} flashes/min')
                     flash_count_arr[f] = flash_count
                     flash_count_area_LE_4km[f] = flash_le4
                     flash_count_area_GT_4km[f] = flash_gt4
@@ -690,13 +641,14 @@ def main(args):
                     flash_density_area_LE_4km[f] = flash_le4 / dt
                     flash_density_area_GT_4km[f] = flash_gt4 / dt
                 else:
+                    if args.debug:
+                        print(f'Feature {f} has no flashes')
                     flash_count_arr[f] = 0
                     flash_count_area_LE_4km[f] = 0
                     flash_count_area_GT_4km[f] = 0
                     flash_density_arr[f] = 0
                     flash_density_area_LE_4km[f] = 0
                     flash_density_area_GT_4km[f] = 0
-        print("Cleaning memory")
         del kdpvol, zdrvol, kdpcol, zdrcol
         gc.collect()
 
@@ -714,7 +666,6 @@ def main(args):
 #     display_top(final_snapshot)
     
     end = time.time()
-    print(end - start)
     track_dim = "track"
     cell_dim = "cell"
     feature_dim = "feature"
