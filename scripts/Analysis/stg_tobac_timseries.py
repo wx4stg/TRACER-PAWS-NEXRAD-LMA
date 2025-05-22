@@ -319,7 +319,7 @@ def main(args):
     lmafiles = sorted(glob(args.lmapath + "*.nc"))
     lma_longitude = []
     lma_latitude = []
-    lma_flash_time = []
+    lma_flash_time = np.array([], dtype="datetime64[ns]")
     lma_area = []
     if args.debug:
         lma_ids = []
@@ -327,23 +327,12 @@ def main(args):
         print(f'Reading LMA: {j}')
         lmadata1 = xr.open_dataset(j)
         lmadata1 = lmadata1.rename({"grid_time": "time"})
-        if i == 0:
-            lma_flash_time = list(pd.to_datetime(lmadata1["flash_time_start"].values))
-        else:
-            lma_flash_time = np.append(
-                lma_flash_time,
-                list(pd.to_datetime(lmadata1["flash_time_start"].values)),
-            )
-        lma_longitude = np.append(
-            lma_longitude, lmadata1["flash_center_longitude"].values
-        )
+        lma_flash_time = np.append(lma_flash_time, lmadata1["flash_time_start"].values)
+        lma_longitude = np.append(lma_longitude, lmadata1["flash_center_longitude"].values)
         lma_latitude = np.append(lma_latitude, lmadata1["flash_center_latitude"].values)
         lma_area = np.append(lma_area, lmadata1["flash_area"].values)
         if args.debug:
             lma_ids = np.append(lma_ids, lmadata1["flash_id"].values)
-    lma_times = pd.to_datetime(lma_flash_time)
-
-    time_sec = lma_times.hour * 3600 + lma_times.minute * 60 + lma_times.second
     # Read in feature information
     savedir = args.tobacpath
     xrdata = xr.open_dataset(savedir + "Track_features_merges.nc")
@@ -391,22 +380,7 @@ def main(args):
     dz = np.abs(np.mean(deltaz)) / 1000
     grid_box_vol = dz * dxy * dxy
 
-    val = pd.to_datetime(xrdata["time"].values)
-
-    time1_arr = np.zeros(len(val))
-    time2_arr = np.zeros(len(val))
-
-    for i in range(len(val)):
-        if i == 0:
-            time1_arr[i] = val[0].hour * 3600 + val[0].minute * 60 + val[0].second - 300
-            time2_arr[i] = val[0].hour * 3600 + val[0].minute * 60 + val[0].second
-        else:
-            time1_arr[i] = (
-                val[i - 1].hour * 3600 + val[i - 1].minute * 60 + val[i - 1].second
-            )
-            time2_arr[i] = val[i].hour * 3600 + val[i].minute * 60 + val[i].second
-            if time1_arr[i] > time2_arr[i]:
-                time1_arr[i] = 0
+    tobac_times = xrdata.time.data
 
 
     feature_zdrvol = dict()
@@ -560,16 +534,15 @@ def main(args):
             ).values.sum()
             if args.debug:
                 print(f'feature_rhvdeficitwcol_total[{f}]: {feature_rhvdeficitwcol_total[f]}')
-            time1 = time1_arr[i]
-            time2 = time2_arr[i]
-            dt = (time2 - time1) / 60
-
-            iltg = np.squeeze(np.array(np.where(time_sec <= time2)))
-            iiltg = np.squeeze(np.array(np.where(time_sec[iltg] > time1)))
-            if iltg.size == 1:
-                inds = iltg
+            time2 = tobac_times[i]
+            if i == 0:
+                time1 = time2 - np.timedelta64(5, 'm')
             else:
-                inds = iltg[iiltg]
+                time1 = tobac_times[i - 1]
+            dt = (time2 - time1) / 60
+            dt = dt.astype('timedelta64[us]').astype(float) / 1e6
+
+            inds = (lma_flash_time <= time2) & (lma_flash_time > time1)
 
             arrlat = []
             arrlon = []
