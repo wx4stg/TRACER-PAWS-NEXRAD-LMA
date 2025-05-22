@@ -321,6 +321,8 @@ def main(args):
     lma_latitude = []
     lma_flash_time = []
     lma_area = []
+    if args.debug:
+        lma_ids = []
     for i, j in enumerate(lmafiles):
         print(f'Reading LMA: {j}')
         lmadata1 = xr.open_dataset(j)
@@ -337,6 +339,8 @@ def main(args):
         )
         lma_latitude = np.append(lma_latitude, lmadata1["flash_center_latitude"].values)
         lma_area = np.append(lma_area, lmadata1["flash_area"].values)
+        if args.debug:
+            lma_ids = np.append(lma_ids, lmadata1["flash_id"].values)
     lma_times = pd.to_datetime(lma_flash_time)
 
     time_sec = lma_times.hour * 3600 + lma_times.minute * 60 + lma_times.second
@@ -604,6 +608,8 @@ def main(args):
                 kdtree = spatial.KDTree(combined_x_y_arrays)
                 lon_points = np.atleast_1d(lma_longitude[inds])
                 lat_points = np.atleast_1d(lma_latitude[inds])
+                if args.debug:
+                    flash_ids = np.atleast_1d(lma_ids[inds])
 
                 for lp in range(len(lat_points)):
                     pt = [lat_points[lp], lon_points[lp]]
@@ -622,7 +628,7 @@ def main(args):
                         else:
                             if args.debug:
                                 print(f'Flash {lp} area: {areas[lp]}')
-                                print(f'Added flash {lp} to feature count...')
+                                print(f'Added flash ID # {flash_ids[lp]} to feature count...')
                             flash_count += 1
 
                         if np.sqrt(areas[lp]) <= 4.0:  # might be inder
