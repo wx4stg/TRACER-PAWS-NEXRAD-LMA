@@ -337,7 +337,7 @@ def main(args):
     savedir = args.tobacpath
     xrdata = xr.open_dataset(savedir + "Track_features_merges.nc")
     
-    path = args.path + "*grid.nc"
+    path = args.path + "*grid.zarr"
     data = xr.open_mfdataset(path)
     data["time"].encoding["units"] = "seconds since 2000-01-01 00:00:00"
     nc_grid = load_cfradial_grids(path)
