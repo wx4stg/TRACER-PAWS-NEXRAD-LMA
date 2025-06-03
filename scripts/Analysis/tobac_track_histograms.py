@@ -559,7 +559,7 @@ def main(args):
     mean_duration_sec = 3600.0 # combo.track_duration.mean().values.astype('timedelta64[s]').astype(float)
 
     # for the altitude-weighted variables, also normalize by the maximum magnitude of a weight.
-    alt_weight_max = 20000  * 1e3
+    alt_weight_max = 20000  * 1e-3
     
     var_bins= dict(
         feature_flash_count = ('Flash count', 
