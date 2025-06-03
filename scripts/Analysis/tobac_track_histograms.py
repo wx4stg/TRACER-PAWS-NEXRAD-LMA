@@ -555,11 +555,11 @@ def main(args):
     pow2 = partial(pow, 2)
     powers_two = np.array([-1, 0] + list(map(pow2, range(25))) )+0.5
     # Values from the 4 June case, rounded to 40 x 40 km and one hour.
-    mean_area = 1600.0 * 1e3 # combo.feature_area.mean().values
+    mean_area = 1600.0 # combo.feature_area.mean().values
     mean_duration_sec = 3600.0 # combo.track_duration.mean().values.astype('timedelta64[s]').astype(float)
 
     # for the altitude-weighted variables, also normalize by the maximum magnitude of a weight.
-    alt_weight_max = 20000
+    alt_weight_max = 20000  * 1e3
     
     var_bins= dict(
         feature_flash_count = ('Flash count', 
