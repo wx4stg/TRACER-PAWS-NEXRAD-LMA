@@ -337,14 +337,7 @@ def main(args):
     savedir = args.tobacpath
     xrdata = xr.open_dataset(savedir + "Track_features_merges.nc")
     
-    # Remove all tracks that don't reach 35 dBZ (or whatever thresh we set below)
-    track_dBZ_thresh = 35.0
-    feature_is_bright = (xrdata['max_reflectivity'] > track_dBZ_thresh)
-    reduced_track_ids = np.unique(xrdata[{'feature':feature_is_bright}].feature_parent_track_id)
-    traversal = OneToManyTraversal(xrdata, ('track','cell','feature'), ('cell_parent_track_id', 'feature_parent_cell_id'))
-    xrdata = traversal.reduce_to_entities('track', reduced_track_ids)
     path = args.path + "*grid.nc"
-
     data = xr.open_mfdataset(path)
     data["time"].encoding["units"] = "seconds since 2000-01-01 00:00:00"
     nc_grid = load_cfradial_grids(path)
