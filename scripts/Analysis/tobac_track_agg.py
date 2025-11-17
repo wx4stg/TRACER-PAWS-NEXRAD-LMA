@@ -405,17 +405,17 @@ def main(args):
         these_zdr_avg = np.zeros(len(these_tracks))
         these_ltg = np.zeros(len(these_tracks))
 
-        for i in range(len(these_tracks)):
-            track_id = combo.isel(track=i).track.data
+        for j in range(len(these_tracks)):
+            track_id = combo.isel(track=j).track.data
             feature_mask = (combo.feature_parent_track_id.data == track_id)
             track_features = combo.isel(feature=feature_mask)
-            track_area_sum[i] = track_features.feature_area.sum().values
-            track_area_avg[i] = track_features.feature_area.mean().values
-            these_kdp_sum[i] = track_features.feature_kdpwt_total.sum().values
-            these_zdr_sum[i] = track_features.feature_zdrwt_total.sum().values
-            these_kdp_avg[i] = track_features.feature_kdpwt_total.mean().values
-            these_zdr_avg[i] = track_features.feature_zdrwt_total.mean().values
-            these_ltg[i] = track_features.feature_flash_count.sum().values
+            track_area_sum[j] = track_features.feature_area.sum().values
+            track_area_avg[j] = track_features.feature_area.mean().values
+            these_kdp_sum[j] = track_features.feature_kdpwt_total.sum().values
+            these_zdr_sum[j] = track_features.feature_zdrwt_total.sum().values
+            these_kdp_avg[j] = track_features.feature_kdpwt_total.mean().values
+            these_zdr_avg[j] = track_features.feature_zdrwt_total.mean().values
+            these_ltg[j] = track_features.feature_flash_count.sum().values
         these_tracks_df = pd.DataFrame(dict(
             track_id=combo.track.values,
             track_duration=combo.track_duration.data.astype('timedelta64[s]').astype(float),
