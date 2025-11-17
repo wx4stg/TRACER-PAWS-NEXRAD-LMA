@@ -403,6 +403,7 @@ def main(args):
         these_kdp_avg = np.zeros(len(these_tracks))
         these_zdr_sum = np.zeros(len(these_tracks))
         these_zdr_avg = np.zeros(len(these_tracks))
+        these_ltg = np.zeros(len(these_tracks))
 
         for i in range(len(these_tracks)):
             track_id = combo.isel(track=i).track.data
@@ -414,6 +415,7 @@ def main(args):
             these_zdr_sum[i] = track_features.feature_zdrwt_total.sum().values
             these_kdp_avg[i] = track_features.feature_kdpwt_total.mean().values
             these_zdr_avg[i] = track_features.feature_zdrwt_total.mean().values
+            these_ltg[i] = track_features.feature_flash_count.sum().values
         these_tracks_df = pd.DataFrame(dict(
             track_id=combo.track.values,
             track_duration=combo.track_duration.data.astype('timedelta64[s]').astype(float),
@@ -423,7 +425,9 @@ def main(args):
             track_zdrvol_avg=these_zdr_avg,
             track_area_sum=track_area_sum,
             track_area_avg=track_area_avg,
+            track_flash_count=these_ltg
         ))
+        these_tracks_df['track_date'] = both_dates[i].strftime('%Y-%m-%d')
         all_tracks = pd.concat((all_tracks, these_tracks_df))
 
     output_path = os.path.join(main_path, 'all_tracks.csv')
