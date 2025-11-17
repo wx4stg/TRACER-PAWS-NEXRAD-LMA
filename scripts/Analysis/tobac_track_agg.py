@@ -419,10 +419,10 @@ def main(args):
         these_tracks_df = pd.DataFrame(dict(
             track_id=combo.track.values,
             track_duration=combo.track_duration.data.astype('timedelta64[s]').astype(float),
-            track_kdpvol_sum=these_kdp_sum,
-            track_kdpvol_avg=these_kdp_avg,
-            track_zdrvol_sum=these_zdr_sum,
-            track_zdrvol_avg=these_zdr_avg,
+            track_kdpwt_sum=these_kdp_sum,
+            track_kdpwt_avg=these_kdp_avg,
+            track_zdrwt_sum=these_zdr_sum,
+            track_zdrwt_avg=these_zdr_avg,
             track_area_sum=track_area_sum,
             track_area_avg=track_area_avg,
             track_flash_count=these_ltg
